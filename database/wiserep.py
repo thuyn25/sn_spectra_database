@@ -203,7 +203,7 @@ if os.path.exists(META_DATA_FILE):
             original_filename = row.get('Ascii file', '').strip()
             if not original_filename:
                 continue
-            print(original_filename)
+            # print(original_filename)
             old_path = os.path.join(current_download_folder, original_filename)
             
             # Check if the file exists in the folder
@@ -212,14 +212,21 @@ if os.path.exists(META_DATA_FILE):
                 iau_name = row.get('IAU name', '').strip()
                 internal_names = row.get('Internal name/s', '').strip()
                 raw_name = iau_name if iau_name else (internal_names.split(',')[0].split('/')[0] if internal_names else 'unknown')
+                if raw_name == 'unknown':
+                    print(original_filename, 'is unknown')
+                    raw_name = 'iPTF16eh'   # for specific case of iPTF16eh
+
                 sn_name = raw_name.replace(" ", "").strip()
                 # sn_name = original_filename.split('_')[0]
                 clean_sn_name = clean_name(sn_name)
                 # Extract YYYY-MM-DD from Obs-date
                 full_obs_date = row.get('Obs-date', 'unknown')
                 obs_date_only = full_obs_date.split()[0] if full_obs_date != 'unknown' else 'unknown'
+                obs_time_only = full_obs_date.split()[1] if full_obs_date != 'unknown' else 'unknown'
+                obs_time_only = obs_time_only.replace(':', '-')
+                obs_time_only = obs_time_only.split('.')[0]
                 
-                new_filename = f"{clean_sn_name}_{full_obs_date}.dat"
+                new_filename = f"{clean_sn_name}_{obs_date_only}_{obs_time_only}.dat"
                 new_path = os.path.join(rename_path, new_filename)
                 
                 # Read original content
@@ -239,8 +246,8 @@ if os.path.exists(META_DATA_FILE):
                     out_file.write(original_content)
 
                 # Remove the original file with the long/complex name
-                if old_path != new_path:
-                    os.remove(old_path)
+                # if old_path != new_path:
+                #     os.remove(old_path)
 
     print(f"Success! Spectra in '{current_download_folder}' are now reformatted for post-processing.")
 else:
