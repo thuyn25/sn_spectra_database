@@ -5,6 +5,7 @@ date:          2026-03-24 15:00:31
 This script is used for pre-processing raw spectra and create SNlist.txt
 '''
 import glob 
+import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -63,9 +64,10 @@ def get_primary_name(row):
     internal = row['Internal name/s'].strip()
     if internal and internal.lower() != 'nan':
         # Split by comma or slash and take the first piece
-        return internal.replace('/', ',').split(',')[0].strip()
-    
-    return f"WIS_Spec_{row.get('Spec. ID', 'unnamed')}"
+        name = internal.replace('/', ',').split(',')[0].strip()
+        return name
+    name = f"iPTF16eh"
+    return name
 wis['sn_name'] = wis.apply(get_primary_name, axis=1)
 wis['sn_name'] = wis['sn_name'].apply(clean_name)
 #------------------------------------------------------------------------
@@ -97,48 +99,57 @@ for name in osc['sn_name']:
 osc['sn_name'] = names
 #------------------------------------------------------------------------
 # Check total numbers of unique events with spectra
-import glob
 osc_spec_dir = '../data/raw/osc_raw_data_20260325'
 wis_spec_dir = '../data/raw/wiserep_rename_data_20260325_130547'
 osc_infiles = glob.glob(osc_spec_dir+"/*.dat")
 wis_infiles = glob.glob(wis_spec_dir+"/*")
 osc_sne = []
 wis_sne = []
-for osc_file, wis_file in zip(osc_infiles, wis_infiles):
-    # print(osc_file)
-    # print(wis_file)
-    osc_dat = osc_file.split('/')[-1]
-    osc_sn_name = osc_dat.split('_')[0]
-    # print(osc_sn_name)
-    wis_dat = wis_file.split('/')[-1]
-    wis_sn_name = wis_dat.split('_')[0]
-    print(wis_sn_name)
-    osc_sne.append(osc_sn_name)
-    wis_sne.append(wis_sn_name)
-    # break
 
-osc_sne = list(set(osc_sne))
-wis_sne = list(set(wis_sne))
-print(f'Number of rows in wiserep metadata must be equal to number of spec files in its folder:\n Checking #files ={len(wis_infiles)} VS #rows={len(wis)}')
-print(f'Number of rows in OSC metadata must be equal to number of spec files in its folder:\n Checking #files ={len(osc_infiles)} VS #rows={len(osc)}\n')
+for f in osc_infiles:
+    fname = os.path.basename(f)
+    sn_name = fname.split('_')[0]
+    osc_sne.append(sn_name)
+    
+for f in wis_infiles:
+    fname = os.path.basename(f)
+    sn_name = fname.split('_')[0]
+    wis_sne.append(sn_name)
 
-print(f'len(osc_sne) from folder: {len(osc_sne)}')
-print(f'OSC METADATA unique sne: {len(osc['sn_name'].unique())}\n')
-print(f'len(wis_sne) from folder: {len(wis_sne)}')
-print(f'WIS METADATA unique sne: {len(wis['Obj. ID'].unique())}')
-#------------------------------------------------------------------------
+unique_osc_folder = set(osc_sne)
+unique_wis_folder = set(wis_sne)
+wis_metadata_names = set(wis['sn_name'].unique())
+osc_metadata_names = set(osc['sn_name'].unique())
 
+print(f"--- WISeREP Statistics ---")
+print(f"Total files in folder: {len(wis_infiles)}")
+print(f"Unique SN names extracted from folder: {len(unique_wis_folder)}")
+print(f"Unique SN names in metadata: {len(wis_metadata_names)}")
 
+# Check for mismatches
+mismatched = unique_wis_folder - wis_metadata_names
+if mismatched:
+    print(f"WARNING: {len(mismatched)} names in folder are NOT in metadata: {list(mismatched)[:5]}...")
+
+print(f"\n--- OSC Statistics ---")
+print(f"Total files in folder: {len(osc_infiles)}")
+print(f"Unique SN names in folder: {len(unique_osc_folder)}")
+print(f"Unique SN names in metadata: {len(osc_metadata_names)}\n")
 #------------------------------------------------------------------------
 
 
 #------------------------------------------------------------------------
 # all_sne = sorted(list(set(wis['sn_name'].tolist() + osc['sn_name'].tolist())))
-unique_wis = list(set(wis['sn_name'].tolist()))
-unique_osc = list(set(osc['sn_name'].tolist()))
-all_sne = list(set(unique_osc + unique_wis))
+unique_wis = wis_metadata_names
+unique_osc = osc_metadata_names
+
+duplicate_names = unique_wis.intersection(unique_osc)
+print(f"Number of SNe found in both WISeREP and OSC: {len(duplicate_names)}")
+print("Duplicate names list:", sorted(list(duplicate_names)))
+all_sne = unique_osc.union(unique_wis)
+print(f"Total unique SLSNe: {len(all_sne)}")
+
 sn_list_data = []
-print('Total unique slsne:', len(all_sne), '\n\n')
 
 for name in all_sne:
     row_wis = wis[wis['sn_name'] == name]
@@ -184,19 +195,19 @@ for name in all_sne:
 #------------------------------------------------------------------------
 # Writing to SNlist.txt
 
-# f1 = open('SNlist.txt', 'w')
-# line1 = f"{'# name':<25}\t{'type':<10}\t{'redshift':<10}\t{'max_date':<10}\t{'discovery_date':<10}"
-# line2 = f"{'#<U25':<25}\t{'<U10':<10}\t{'<10':<10}\t{'<10':<10}\t{'<10':<10}"
+f1 = open('SNlist.txt', 'w')
+line1 = f"{'# name':<25}\t{'type':<10}\t{'redshift':<10}\t{'max_date':<10}\t{'discovery_date':<10}"
+line2 = f"{'#<U25':<25}\t{'<U10':<10}\t{'<10':<10}\t{'<10':<10}\t{'<10':<10}"
 
-# f1.write(line1 + '\n')
-# f1.write(line2 + '\n')
+f1.write(line1 + '\n')
+f1.write(line2 + '\n')
 
-# for row in sn_list_data:
-#     sn_name, sn_type, z, max_date, discovery_date = row
-#     z = str(z) if not pd.isna(z) else 'unknown'
-#     max_date = str(max_date) if not pd.isna(max_date) else 'unknown'
-#     discovery_date = str(discovery_date) if not pd.isna(discovery_date) else 'unknown'
+for row in sn_list_data:
+    sn_name, sn_type, z, max_date, discovery_date = row
+    z = str(z) if not pd.isna(z) else 'unknown'
+    max_date = str(max_date) if not pd.isna(max_date) else 'unknown'
+    discovery_date = str(discovery_date) if not pd.isna(discovery_date) else 'unknown'
 
-#     f1.write(f'{sn_name:<25}{sn_type:<10}{z:<10}{max_date:<20}{discovery_date:<20}\n')
+    f1.write(f'{sn_name:<25}{sn_type:<10}{z:<10}{max_date:<20}{discovery_date:<20}\n')
 
 
