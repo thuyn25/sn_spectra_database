@@ -17,7 +17,7 @@ import sys
 module_dir = os.path.abspath('../scripts/')
 sys.path.append(module_dir)
 
-from auxilary import clean_name
+from auxiliary import clean_name
 
 #------------------------------------------------------------------------
 WISeREP                = "www.wiserep.org"
@@ -164,7 +164,7 @@ while True:
     page_num = page_num + 1                 
     # remove meta data file
     os.remove(meta_data_file)
-
+print(META_DATA_LIST)
 # write meta data list to file         
 if META_DATA_LIST != []:
     f = open(META_DATA_FILE, 'w')
@@ -213,7 +213,7 @@ if os.path.exists(META_DATA_FILE):
                 internal_names = row.get('Internal name/s', '').strip()
                 raw_name = iau_name if iau_name else (internal_names.split(',')[0].split('/')[0] if internal_names else 'unknown')
                 if raw_name == 'unknown':
-                    print(original_filename, 'is unknown')
+                    # print(original_filename, 'is unknown')
                     raw_name = 'iPTF16eh'   # for specific case of iPTF16eh
 
                 sn_name = raw_name.replace(" ", "").strip()
@@ -225,10 +225,34 @@ if os.path.exists(META_DATA_FILE):
                 obs_time_only = full_obs_date.split()[1] if full_obs_date != 'unknown' else 'unknown'
                 obs_time_only = obs_time_only.replace(':', '-')
                 obs_time_only = obs_time_only.split('.')[0]
-                
-                new_filename = f"{clean_sn_name}_{obs_date_only}_{obs_time_only}.dat"
+                telescope = row.get('Telescope', 'unknown')
+                instrument = row.get('Instrument', 'unknown')
+                spec_id = row.get('Obj. ID', 'unknown')
+
+                base_name = f"{clean_sn_name}_{obs_date_only}_{obs_time_only}_{spec_id}"
+                new_filename = f'{base_name}.dat'
                 new_path = os.path.join(rename_path, new_filename)
-                
+                # if os.path.exists(new_path):
+                #     print(f'{new_filename} exists. change the name...')
+                #     new_filename1 = f"{clean_sn_name}_{obs_date_only}_{spec_id}_dup.dat"
+                #     new_path = os.path.join(rename_path, new_filename1)
+                #     if os.path.exists(new_path):
+                #         new_filename2 = f"{clean_sn_name}_{obs_date_only}_{spec_id}_dup2.dat"
+                #         print(f'{new_path} still exists second time. change the name -> {new_filename2}')
+                #         new_path = os.path.join(rename_path, new_filename2)
+                #         if os.path.exists(new_path):
+                #             new_filename3 = f"{clean_sn_name}_{obs_date_only}_{spec_id}_dup3.dat"
+                #             print(f'Third renameing. This file is HARDHEADED!!! {new_path} -> {new_filename3}' )
+                #             new_path = os.path.join(rename_path, new_filename3)
+                counter = 1
+                while os.path.exists(new_path):
+                    new_filename = f'{base_name}_v{counter}.dat'
+                    new_path = os.path.join(rename_path, new_filename)
+                    counter += 1
+
+                if counter > 1:
+                    print(f"Collision resolved: {new_filename} (needed {counter-1} attempts)")
+
                 # Read original content
                 with open(old_path, 'r', encoding='utf-8', errors='ignore') as spec_file:
                     original_content = spec_file.read()

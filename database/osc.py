@@ -17,7 +17,7 @@ import datetime
 module_dir = os.path.abspath('../scripts/')
 sys.path.append(module_dir)
 
-from auxilary import clean_name, load_json_safe, clean_osc_sn_type
+from auxiliary import clean_name, load_json_safe, clean_osc_sn_type
 
 #--------------------------------------------------- PARAMETERS --------------------------------------------------#
 current_datetime = datetime.datetime.now()
@@ -204,8 +204,18 @@ def process_spec_file(data, sn_name):
                             date_part = 'no_date'
 
                         clean_sn_name = clean_name(sn_name)
-                        spec_name = f"{clean_sn_name}_{date_part}.dat"
+                        basename = f"{clean_sn_name}_{date_part}"
+                        spec_name = f"{basename}.dat"
                         specpath = os.path.join(outpath, spec_name)
+                        counter = 1
+                        while os.path.exists(specpath):
+                            spec_name = f"{basename}_v{counter}.dat"
+                            specpath = os.path.join(outpath, spec_name)
+                            counter += 1
+                        
+                        if counter > 1:
+                            print(f"Collision resolve: {spec_name} (needed {counter-1} attempts).")
+
 
                         # --- 3. SAVE .DAT FILE (KEPT EXACTLY THE SAME) ---
                         header_text = (
@@ -223,7 +233,7 @@ def process_spec_file(data, sn_name):
                         row = {
                             'sn_name': clean_sn_name,
                             'sn_type': sn_type,
-                            'redshift_host': z_global,
+                            'redshift': z_global,
                             'lum_dist': d_L,
                             'discovery_date(MJD)': disdate,
                             'maxdate(MJD)': maxdate,
@@ -269,16 +279,9 @@ for folder in sn_subfolders:
             print(f'Data in file {file} is None')
             continue
         sn_type, z, d_L, disdate_mjd, maxdate_mjd = extract_metadata(sn_data, sn_name)
-
-        # if sn_type == 'SLSNI' or sn_type == 'SLSNII' or sn_type == 'SLSNR':
-        if sn_type in sn_types:
-            all_slsn_metadata.append({'sn_name': sn_name, 'sn_type': sn_type, 'redshift': z, 'lum_dist': d_L,
-                                      'discovery_date(MJD)': disdate_mjd, 'maxdate(MJD)': maxdate_mjd})
-            slsn_type_counts[sn_type] = slsn_type_counts.get(sn_type, 0) + 1
-
+        
         # Saving spectra files
         new_rows = process_spec_file(sn_data, sn_name)
-
         if new_rows:
             # .extend adds all dictionaries in the list to our master list
             all_slsn_metadata.extend(new_rows)
