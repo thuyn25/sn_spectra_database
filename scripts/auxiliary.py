@@ -47,3 +47,8 @@ def load_json_safe(file_path):
     except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError) as e:
         print(f"Skipping {file_path}: Failed to load JSON. {e}")
         return None
+
+def normalize_name(name):   # for matching sn_event
+    if not isinstance(name, str): return ""
+    # Remove all non-alphanumeric characters and lowercase
+    return re.sub(r'[^a-zA-Z0-9]', '', name)

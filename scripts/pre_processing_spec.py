@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from astropy.time import Time
-from auxiliary import clean_name
+from auxiliary import clean_name, normalize_name
 
 
 # from auxiliary import load_lines
@@ -22,11 +22,14 @@ osc_path = '../data/raw/osc_metadata.csv'
 tns_path = '../data/raw/tns_metadata.csv'
 wiserep_path = '../data/raw/wiserep_metadata.csv'
 liu17_path = '../data/raw/SLSNIc-LiuModjazBianco17-infolist.txt'
+gomez24_path = '../data/raw/Gomez2024_slsneI_data.txt'
+
 dtype=[('name','<U16'),('redshift',np.float64),('E(B-V)',np.float64),('temperature',np.float64),('note','<U15'), ('max_MJD','<U10'),('max_date','<U10'),('startpos','<U3'),('obs_band','<U3'),('note1','<U15')]
 
 osc = pd.read_csv(osc_path)
 tns = pd.read_csv(tns_path)
 wis = pd.read_csv(wiserep_path)
+gomez24_df = pd.read_csv(gomez24_path, sep=r"\s+")
 print('original', len(wis))
 #------------------------------------------------------------------------
 
@@ -48,7 +51,27 @@ for name, t in zip(liu17_df['name'], liu17_df['max_MJD']):
     max_dates.append(parts[0])
 liu17_df['sn_name'] = names
 liu17_df['max_brightness_date'] = max_dates
-# print(liu17_df.columns)
+
+max_dates = []
+discovery_dates = []
+for t_peak, t_explode in zip(gomez24_df['Peak'], gomez24_df['Explosion']):
+    max_date = Time(t_peak, format='mjd', scale='utc')
+    max_date = max_date.to_value('iso')
+    max_date = max_date.split(' ')[0]
+    # print(max_date)
+    max_dates.append(max_date)
+
+    disdate = Time(t_explode, format='mjd', scale='utc')
+    disdate = disdate.to_value('iso')
+    disdate = disdate.split(' ')[0]
+    # print(max_date)
+    discovery_dates.append(disdate)
+
+gomez24_df['max_brightness_date'] = max_dates
+gomez24_df['discovery_date'] = discovery_dates
+gomez24_df['norm_name'] = gomez24_df['Name'].apply(normalize_name)
+gomez24_df['Name'] = gomez24_df['Name'].astype(str).str.strip()
+gomez24_df = gomez24_df.apply(lambda x: x.str.strip() if x.dtype == "object" else x)    # strip all white string columns 
 #------------------------------------------------------------------------
 
 
@@ -151,6 +174,7 @@ print(f"Total unique SLSNe: {len(all_sne)}")
 
 sn_list_data = []
 
+# for gname in gomez24_df['Name']: print( gname)
 for name in all_sne:
     row_wis = wis[wis['sn_name'] == name]
     row_osc = osc[osc['sn_name'] == name]
@@ -184,6 +208,18 @@ for name in all_sne:
     elif name in tns['sn_name'].values:
         max_date = 'unknown'
         discovery_date = tns.loc[tns['sn_name'] == name, 'discovery_date'].values[0]
+    
+    normed_name = normalize_name(name)
+    # print(name, 'converted to -> ', normed_name)
+    if normed_name in gomez24_df['norm_name'].values:
+        if max_date == 'unknown' or discovery_date == 'unknown':
+            gomez_row = gomez24_df[gomez24_df['norm_name'] == normed_name]
+            if not gomez_row.empty:
+                print(f'{normed_name} matching with gomez df...')
+                print('max_date:', max_date, 'disdate:', discovery_date)
+                max_date = gomez_row.iloc[0]['max_brightness_date']
+                discovery_date = gomez_row.iloc[0]['discovery_date']
+
 
     if str(max_date).lower() == 'nan': max_date = 'unknown'
     if str(discovery_date).lower() == 'nan': discovery_date = 'unknown'
