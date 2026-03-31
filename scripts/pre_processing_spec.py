@@ -1,249 +1,146 @@
 '''
 author:        thuyn25 <thuyn27@lsu.edu>
-date:          2026-03-24 15:00:31
-
-This script is used for pre-processing raw spectra and create SNlist.txt
+date:          2026-03-25 13:25:57
+Copyright © YourCompanyName All rights reserved
 '''
-import glob 
 import os
+import glob 
+from auxiliary import load_lines
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
+from specload import read_spec
+from remove_tellurics import remove_tellurics, degrade_telluric
 from astropy.time import Time
-from auxiliary import clean_name, normalize_name
+
+def setup_new_templates(inbase, outbase, sndata, remtels=None, telspec=None):
+    infiles = glob.glob(inbase+"/*")
+    lines = load_lines()
+    # /Users/beehuynh/Developer/test_suites/sn_spectra_database/data/raw/osc_raw_data_20260325/2010hy_2010-09-16.dat
+    for file in infiles:
+        unkflag1 = False     # for 'unknown' max_date, use discovery_date
+        unkflag2 = False     # for 'unknown' max_date and discovery_date
+        filename=file.split("/")[-1]
+        sn_name = filename.split('_')[0]
+
+        print(filename)
+
+        w = sndata['name'] == sn_name   # sndata from SNlist.txt
+        # print(w)
+        sntype = sndata['type'][w][0]
+        redshift = sndata['redshift'][w][0]
+        maxdate = sndata['max_date'][w][0]
+        
+        if maxdate == 'unknown':
+            maxdate=sndata['discovery_date'][w][0]
+            unkflag1=True
+            if maxdate == 'unknown':    # both max_date and disdate = unknown
+                continue
+            else:
+                unkflag2=True
+        # print(maxdate)
+
+        maxtime = Time(maxdate, format='isot', scale='utc')
+        # Get observation time
+        obs_datestr = filename.split('_')[1]
+        obs_datestr = obs_datestr.split('.')[0]
+        # print(obs_datestr)
+        obstime = Time(obs_datestr, format='isot', scale='utc')
+
+        phase = obstime.jd - maxtime.jd
+        if phase==0:
+            ph='max'
+        elif phase < 0:
+            ph=f'm{abs(round(phase)):04d}'
+        elif phase > 0:
+            ph=f'p{abs(round(phase)):04d}'
+        
+        outname = "sn"+sn_name+'.'+ph+'.dat'
+
+        tspec, isest = read_spec(file, silence=True)
+        if remtels is not None:
+            if outname in remtels:
+                corrspec, o2tellscale, o2tellshift, h2otellscale, h2otellshift = remove_tellurics(tspec, telspec)
+            else:
+                corrspec=tspec
+                o2tellscale=0
+                o2tellshift=0
+                h2otellscale=0
+                h2otellshift=0
+        else:
+            corrspec = tspec
+
+        outpath= os.path.join(str(outbase),str(sntype))
+        os.makedirs(outpath, exist_ok=True)
+        outfile = os.path.join(outpath, outname)
+        z = float(redshift)
+        corrspec['wav'] /= (1+z) #de-redshift
+        spec_source = 'unknown'
+        header = f'{sn_name} data from WISeREP/OSC\n'
+        header+='\n'
+        header+=f"de-redshifted assuming z={z:.7f}\n"
+        header+=f'type = {sntype}\n'
+        header+=f'phase = {phase:.3f}\n'
+        header+='\n'
+        if isest:
+            header+="WARNING: fake error spectrum!\n"
+        else: 
+            header+="\n"
+        if unkflag1:
+            header+='Max brightness date unknown; taken as discovery date\n'
+            if unkflag2:
+                header+='Both max brightness date and discovery date are unknown. Skip the event.\n'
+        else:
+            header+='\n'
+        header+='wav flux eflux'
+        np.savetxt(outfile, corrspec, header=header)
 
 
-# from auxiliary import load_lines
-# from specload import read_spec
-# from remove_tellurics import remove_tellurics, degrade_telluric
 
-#---------------------------------- MAKE SNlist.txt ---------------------------------
-osc_path = '../data/raw/osc_metadata.csv'
-tns_path = '../data/raw/tns_metadata.csv'
-wiserep_path = '../data/raw/wiserep_metadata.csv'
-liu17_path = '../data/raw/SLSNIc-LiuModjazBianco17-infolist.txt'
-gomez24_path = '../data/raw/Gomez2024_slsneI_data.txt'
+if __name__ == '__main__':
 
-dtype=[('name','<U16'),('redshift',np.float64),('E(B-V)',np.float64),('temperature',np.float64),('note','<U15'), ('max_MJD','<U10'),('max_date','<U10'),('startpos','<U3'),('obs_band','<U3'),('note1','<U15')]
+    inbase = '/Users/beehuynh/Developer/test_suites/sn_spectra_database/data/raw/osc_raw_data_20260325'
+    outbase = '/Users/beehuynh/Developer/test_suites/sn_spectra_database/data/processed/'
+    dtype =[('name','<U16'),('type','<U11'), ('redshift','<U10'), ('max_date','<U20'),('discovery_date','<U20')]
+    sndata = np.loadtxt('SLSNlist.txt', comments='#', dtype=dtype)
+    # w = sndata['name'] == '2009jh' 
+    # sntype = sndata['type'][w][0]
+    # print(f'With w={w}, retrieving sn type:', sntype)
+    # print(sndata, sndata.dtype.names)
 
-osc = pd.read_csv(osc_path)
-tns = pd.read_csv(tns_path)
-wis = pd.read_csv(wiserep_path)
-gomez24_df = pd.read_csv(gomez24_path, sep=r"\s+")
-print('original', len(wis))
-#------------------------------------------------------------------------
-
-
-#------------------------------------------------------------------------
-# Contain max_date of some events
-liu17_data = np.genfromtxt(liu17_path, dtype=dtype, skip_header=1)
-liu17_data['max_MJD'] = np.array([s.split('(')[0] for s in liu17_data['max_MJD']])
-liu17_df = pd.DataFrame(liu17_data)
-names = []
-max_dates = []
-for name, t in zip(liu17_df['name'], liu17_df['max_MJD']):
-    new_name = clean_name(name)
-    names.append(new_name)
-
-    date = Time(t, format='mjd', scale='utc')
-    date = (date.to_value('iso'))
-    parts = date.split(' ')
-    max_dates.append(parts[0])
-liu17_df['sn_name'] = names
-liu17_df['max_brightness_date'] = max_dates
-
-max_dates = []
-discovery_dates = []
-for t_peak, t_explode in zip(gomez24_df['Peak'], gomez24_df['Explosion']):
-    max_date = Time(t_peak, format='mjd', scale='utc')
-    max_date = max_date.to_value('iso')
-    max_date = max_date.split(' ')[0]
-    # print(max_date)
-    max_dates.append(max_date)
-
-    disdate = Time(t_explode, format='mjd', scale='utc')
-    disdate = disdate.to_value('iso')
-    disdate = disdate.split(' ')[0]
-    # print(max_date)
-    discovery_dates.append(disdate)
-
-gomez24_df['max_brightness_date'] = max_dates
-gomez24_df['discovery_date'] = discovery_dates
-gomez24_df['norm_name'] = gomez24_df['Name'].apply(normalize_name)
-gomez24_df['Name'] = gomez24_df['Name'].astype(str).str.strip()
-gomez24_df = gomez24_df.apply(lambda x: x.str.strip() if x.dtype == "object" else x)    # strip all white string columns 
-#------------------------------------------------------------------------
-
-
-#------------------------------------------------------------------------
-# Contain no max_date nor discovery_date
-wis['IAU name'] = wis['IAU name'].fillna('')
-wis['Internal name/s'] = wis['Internal name/s'].fillna('')
-def get_primary_name(row):
-    name = row['IAU name'].strip()
-    if name and name.lower() != 'nan':
-        return name
+    # list of files to remove tellurics; use the standardized template names for output
+    remtels=['snCSS121015.max.dat','sn2019cqc.p0009.dat','sn2013hx.p0017.dat',
+			'snCSS121015.p0053.dat','sn2018jkq.p0015.dat','sn2019cqc.p0010.dat',
+			'sn2019xfs.p0029.dat','snCSS121015.p0400.dat','snCSS121015.m0002.dat',
+			'sn2019gsp.p0007.dat','sn2013hx.p0000.dat','sn2013hx.p0018.dat',
+			'snCSS121015.p0406.dat','snCSS121015.p0052.dat','snCSS121015.p0407.dat',
+			'sn2002ic.p0306.dat','sn2002ic.p0016.dat','sn2011km.p0030.dat',
+			'sn2019fcg.m0002.dat','sn2012ca.p0112.dat','sn2017eby.p0015.dat',
+			'snPTF12efc.p0008.dat','sn2017ifu.p0051.dat','sn2011km.p0064.dat',
+			'sn2002ic.p0020.dat','sn2002ic.p0275.dat','sn2002ic.p0357.dat',
+			'snASASSN-15og.p0087.dat','sn2016iks.m0074.dat','sn2011km.p0303.dat',
+			'sn2005gj.p0042.dat','sn2012ca.p0527.dat','sn2002ic.p0057.dat',
+			'sn2012ca.p0495.dat','snPTF12csy.p0159.dat','sn2008S.m0004.dat',
+			'snLSQ14pt.p0008.dat','snLSQ14pt.p0007.dat','sn2010jl.p0459.dat',
+			'sn2015da.p0104.dat','sn2010jl.p0025.dat','sn2007pk.m0001.dat',
+			'sn1997cy.p0410.dat','snOGLE-2013-SN-016.m0023.dat','sn2015da.p0065.dat',
+			'sn2015da.m0079.dat','sn2015da.p0608.dat','sn1995G.p0726.dat',
+			'sn2015da.m0053.dat','sn1996L.p0060.dat','snOGLE-2013-SN-019.p0000.dat',
+			'sn2015da.p0121.dat','sn2010jl.p0492.dat','sn2015da.m0027.dat',
+			'sn2010jl.p0145.dat','sn2005db.p0141.dat','sn2010jl.p0072.dat',
+			'sn2007pk.p0076.dat','sn2007sv.p0031.dat','snLSQ13zm.p0028.dat',
+			'sn2000ch.p3278.dat','snLSQ13zm.p0022.dat','sn2019abn.p0025.dat',
+			'sn2007sv.p0022.dat','snOGLE-2013-SN-137.m0004.dat','sn2017jfs.p0009.dat',
+			'sn2019abn.p0053.dat','sn2020agp.p0005.dat','sn2014cn.max.dat',
+			'sn2013fs.m0001.dat','sn2013fs.max.dat','sniPTF14flu.p0016.dat',
+			'sniPTF15crj.m0008.dat','sniPTF14flu.p0017.dat','sn2019vqd.p0002.dat',
+			'sniPTF14flu.p0024.dat','snPTF10fqs.max.dat','snPTF10fqs.p0024.dat']
     
-    internal = row['Internal name/s'].strip()
-    if internal and internal.lower() != 'nan':
-        # Split by comma or slash and take the first piece
-        name = internal.replace('/', ',').split(',')[0].strip()
-        return name
-    name = f"iPTF16eh"
-    return name
-wis['sn_name'] = wis.apply(get_primary_name, axis=1)
-wis['sn_name'] = wis['sn_name'].apply(clean_name)
-#------------------------------------------------------------------------
+    # Load in the telluric spectrum; this can take a bit since the file is quite large
+    print("Loading high-resolution telluric spectrum...")
+    ts = np.genfromtxt('telspec.dat', names='wav,flux')
+    lines=load_lines()
+    binnedwav=np.arange(5500,12000,2.5)
+    tell=degrade_telluric(ts, binnedwav)
 
+    setup_new_templates(inbase, outbase, sndata, remtels=remtels, telspec=tell)
 
-#------------------------------------------------------------------------
-# Contain only discovery_date
-names = []
-disdates = []
-new_name = ''
-for name, utdate in zip(tns['Name'], tns['Discovery Date (UT)']):
-    new_name = clean_name(name)
-    names.append(new_name)
-
-    date = utdate.split(' ')[0]
-    disdates.append(date)
-tns['sn_name'] = names
-tns['discovery_date'] = disdates
-#------------------------------------------------------------------------
-
-
-#------------------------------------------------------------------------
-# Contain both max_date (some) + discovery_date
-names = []
-new_name = ''
-for name in osc['sn_name']:
-    new_name = clean_name(name)
-    names.append(new_name)
-osc['sn_name'] = names
-#------------------------------------------------------------------------
-# Check total numbers of unique events with spectra
-osc_spec_dir = '../data/raw/osc_raw_data_20260325'
-wis_spec_dir = '../data/raw/wiserep_rename_data_20260325_130547'
-osc_infiles = glob.glob(osc_spec_dir+"/*.dat")
-wis_infiles = glob.glob(wis_spec_dir+"/*")
-osc_sne = []
-wis_sne = []
-
-for f in osc_infiles:
-    fname = os.path.basename(f)
-    sn_name = fname.split('_')[0]
-    osc_sne.append(sn_name)
-    
-for f in wis_infiles:
-    fname = os.path.basename(f)
-    sn_name = fname.split('_')[0]
-    wis_sne.append(sn_name)
-
-unique_osc_folder = set(osc_sne)
-unique_wis_folder = set(wis_sne)
-wis_metadata_names = set(wis['sn_name'].unique())
-osc_metadata_names = set(osc['sn_name'].unique())
-
-print(f"--- WISeREP Statistics ---")
-print(f"Total files in folder: {len(wis_infiles)}")
-print(f"Unique SN names extracted from folder: {len(unique_wis_folder)}")
-print(f"Unique SN names in metadata: {len(wis_metadata_names)}")
-
-# Check for mismatches
-mismatched = unique_wis_folder - wis_metadata_names
-if mismatched:
-    print(f"WARNING: {len(mismatched)} names in folder are NOT in metadata: {list(mismatched)[:5]}...")
-
-print(f"\n--- OSC Statistics ---")
-print(f"Total files in folder: {len(osc_infiles)}")
-print(f"Unique SN names in folder: {len(unique_osc_folder)}")
-print(f"Unique SN names in metadata: {len(osc_metadata_names)}\n")
-#------------------------------------------------------------------------
-
-
-#------------------------------------------------------------------------
-# all_sne = sorted(list(set(wis['sn_name'].tolist() + osc['sn_name'].tolist())))
-unique_wis = wis_metadata_names
-unique_osc = osc_metadata_names
-
-duplicate_names = unique_wis.intersection(unique_osc)
-print(f"Number of SNe found in both WISeREP and OSC: {len(duplicate_names)}")
-print("Duplicate names list:", sorted(list(duplicate_names)))
-all_sne = unique_osc.union(unique_wis)
-print(f"Total unique SLSNe: {len(all_sne)}")
-
-sn_list_data = []
-
-# for gname in gomez24_df['Name']: print( gname)
-for name in all_sne:
-    row_wis = wis[wis['sn_name'] == name]
-    row_osc = osc[osc['sn_name'] == name]
-    # print(row_wis, row_osc)
-    # break
-
-    if not row_wis.empty:
-        sn_type = row_wis.iloc[0]['Obj. Type']
-        z = row_wis.iloc[0]['Redshift']
-    elif not row_osc.empty:
-        sn_type = row_osc.iloc[0]['sn_type']
-        z = row_osc.iloc[0]['redshift']
-    else:
-        print(f'{name} does not have info saved...Debug')
-        continue
-
-    max_date = 'unknown'
-    discovery_date = 'unknown'
-    
-    if name in liu17_df['sn_name'].values:
-        max_date = liu17_df.loc[liu17_df['sn_name'] == name, 'max_brightness_date'].values[0]
-        if name in tns['sn_name'].values:
-            discovery_date = tns.loc[tns['sn_name'] == name, 'discovery_date'].values[0]
-        elif name in osc['sn_name'].values:
-            discovery_date = osc.loc[osc['sn_name'] == name, 'discovery_date(MJD)'].values[0]
-
-    elif name in osc['sn_name'].values:
-        max_date = osc.loc[osc['sn_name'] == name, 'maxdate(MJD)'].values[0]
-        discovery_date = osc.loc[osc['sn_name'] == name, 'discovery_date(MJD)'].values[0]
-    
-    elif name in tns['sn_name'].values:
-        max_date = 'unknown'
-        discovery_date = tns.loc[tns['sn_name'] == name, 'discovery_date'].values[0]
-    
-    normed_name = normalize_name(name)
-    # print(name, 'converted to -> ', normed_name)
-    if normed_name in gomez24_df['norm_name'].values:
-        if max_date == 'unknown' or discovery_date == 'unknown':
-            gomez_row = gomez24_df[gomez24_df['norm_name'] == normed_name]
-            if not gomez_row.empty:
-                print(f'{normed_name} matching with gomez df...')
-                print('max_date:', max_date, 'disdate:', discovery_date)
-                max_date = gomez_row.iloc[0]['max_brightness_date']
-                discovery_date = gomez_row.iloc[0]['discovery_date']
-
-
-    if str(max_date).lower() == 'nan': max_date = 'unknown'
-    if str(discovery_date).lower() == 'nan': discovery_date = 'unknown'
-    
-    sn_list_data.append([name, sn_type, z, max_date, discovery_date])
-#------------------------------------------------------------------------
-
-
-#------------------------------------------------------------------------
-# Writing to SNlist.txt
-
-f1 = open('SNlist.txt', 'w')
-line1 = f"{'# name':<25}\t{'type':<10}\t{'redshift':<10}\t{'max_date':<10}\t{'discovery_date':<10}"
-line2 = f"{'#<U25':<25}\t{'<U10':<10}\t{'<10':<10}\t{'<10':<10}\t{'<10':<10}"
-
-f1.write(line1 + '\n')
-f1.write(line2 + '\n')
-
-for row in sn_list_data:
-    sn_name, sn_type, z, max_date, discovery_date = row
-    z = str(z) if not pd.isna(z) else 'unknown'
-    max_date = str(max_date) if not pd.isna(max_date) else 'unknown'
-    discovery_date = str(discovery_date) if not pd.isna(discovery_date) else 'unknown'
-
-    f1.write(f'{sn_name:<25}{sn_type:<10}{z:<10}{max_date:<20}{discovery_date:<20}\n')
-
-
+    # setup_new_templates(inbase, outbase, sndata)
