@@ -52,14 +52,14 @@ def smooth_template(template, newwav, cspacing, isok, lowwav=None, highwav=None,
     w = np.argwhere(dwav>tspec['wav'][:-1]/res).flatten()
     nw=np.size(w)
     isgap = np.zeros(np.size(newwav))
-
     for i in range(0, nw):
         if np.size(tspec['wav'][w[i]])==0:
             continue
-        
         wgap=(newwav >= np.min(tspec['wav'][w[i]]))&(newwav <= np.max(tspec['wav'][w[i]]))
         ngap = np.sum(wgap)
-        cspacing[wgap] = np.max(newwav[wgap]) - np.min(newwav[wgap])
+        if np.any(wgap):
+            cspacing[wgap] = np.max(newwav[wgap]) - np.min(newwav[wgap])
+            isgap[wgap] = 1
 
     wgap = isgap==1
     ngap=np.sum(wgap)
@@ -70,16 +70,22 @@ def smooth_template(template, newwav, cspacing, isok, lowwav=None, highwav=None,
     if highwav is None: 
         highwav = np.min(tspec['wav'])
 
+    use_eflux = np.median(tspec['eflux']) > 0 
+
+    dtype=[('wav',float),('flux',float),('eflux',float)]
     # Smooth the spectrum
-    if datares < 300:
+    if datares < 300 or not use_eflux:
         print('input data are low resolution (R='+str(datares)+')...no smoothing applied!')
         finterp = interp1d(tspec['wav'],tspec['flux'],bounds_error=False)
         newflux = finterp(newwav)
         finterp = interp1d(tspec['wav'],tspec['eflux'],bounds_error=False)
         neweflux = finterp(newwav)
         wfin=np.isfinite(newflux)&np.isfinite(neweflux)
+        
+        if not np.any(wfin):
+            return np.array([], dtype=dtype)
+        
         smoothspec=[]
-        dtype=[('wav',float),('flux',float),('eflux',float)]
         for l,f,e in zip(newwav[wfin],newflux[wfin],neweflux[wfin]):
             smoothspec.append(np.array((l,f,e),dtype=dtype))
         smoothspec=np.array(smoothspec)
@@ -95,6 +101,10 @@ def smooth_template(template, newwav, cspacing, isok, lowwav=None, highwav=None,
             else:
                 wuse=(isok==1)&(np.logical_not(np.isfinite(pull))|np.abs(pull)<3.0)
                 nuse=np.sum(wuse)
+            
+            if nuse < 4:
+                print('too few points to smooth! Returning empty array.')
+                return np.array([], dtype = dtype)
             print('smoothing data...', niter)
             smoothspec = sgfilter2(tspec[wuse], newwav, cspacing=cspacing, res=res, order=order)
             smoothspec['eflux'][wgap]=smoothspec['flux'][wgap]
@@ -124,6 +134,9 @@ def smooth_template(template, newwav, cspacing, isok, lowwav=None, highwav=None,
             finterp=interp1d(testwav,teststd,bounds_error=False)
             pull=diff/finterp(tspec['wav'])
             nlast=nuse
+    if smoothspec.size == 0:
+        print('smoothspec.size == 0. Returning empty array.')
+        return np.array([], dtype=dtype)
     wok=(smoothspec['wav']>=lowwav)&(smoothspec['wav']<=highwav)
     return smoothspec[wok]
 
@@ -136,9 +149,12 @@ def process_templates(inbase, outbase):
     newwav=np.power(10, logwav)
     res=100
     order = 4
-
+    counter_unk = 0
+    total_files = 0
+    counter_success = 0
     for file in files:
         print(file)
+        total_files += 1
         f = open(file, 'r')
         header = f.readline()
         header += f.readline()
@@ -162,6 +178,7 @@ def process_templates(inbase, outbase):
         spec, isest = read_spec(file)
         if (np.min(spec['wav'])>np.max(newwav)) or (np.max(spec['wav'])<np.min(newwav)):
             print('Spectrum does not cover the wavelength range of interest. Skip the event.\n')
+            counter_unk += 1
             continue
         
         fnorm = 1. / np.median(spec['flux'])
@@ -211,20 +228,32 @@ def process_templates(inbase, outbase):
         lowwav = np.min(spec['wav'])
         highwav = np.max(spec['wav'])
 
-        w2 = spec['eflux']/np.median(spec['eflux'])<10
-        if np.min(spec['wav'][w2]) >= lowwav:
-            lowwav = np.min(spec['wav'][w2])
-        if np.max(spec['wav'][w2]) <= highwav:
-            highwav = np.max(spec['wav'][w2])
+        median_eflux = np.median(spec['eflux'])
+
+        if median_eflux > 0:
+            w2 = spec['eflux']/np.median(spec['eflux'])<10
+            if np.any(w2):
+                if np.min(spec['wav'][w2]) >= lowwav:
+                    lowwav = np.min(spec['wav'][w2])
+                if np.max(spec['wav'][w2]) <= highwav:
+                    highwav = np.max(spec['wav'][w2])
+        else:
+            print(f'This {filename} has zero/fake eflux. Skipping eflux filtering.')                    
+        # w2 = spec['eflux']/np.median(spec['eflux'])<10
+        # if np.min(spec['wav'][w2]) >= lowwav:
+        #     lowwav = np.min(spec['wav'][w2])
+        # if np.max(spec['wav'][w2]) <= highwav:
+        #     highwav = np.max(spec['wav'][w2])
         
-        print(outname)
-        temspec = smooth_template(spec, newwav, cspacing, isok, lowwav=lowwav, highwav=highwav, res=res, order=order)
+        temspec = smooth_template(spec, newwav, cspacing, isok, lowwav=lowwav, highwav=highwav,res=res, order=order)
+        if temspec.size == 0:
+            print(f'this {filename} is empty.')
         header += f'starting wavelength: {lowwav:.3f} A\n'
         header += f'ending wavelength: {highwav:.3f} A\n'
         header += '\n'
         header += "wav\tflux\teflux\n"
         np.savetxt(outname, temspec, header=header)
-
+        counter_success += 1
         plt.figure()
         plt.plot(spec['wav'], spec['flux'], label=f'original {filename}')
         plt.plot(temspec['wav'], temspec['flux'], label='smoothed', linestyle='--', color='r')
@@ -234,11 +263,15 @@ def process_templates(inbase, outbase):
         plt.legend()
         plt.savefig(outname.replace('.dat', '.png'), dpi=300)
         plt.close()
+    
+    print(f'Total files processed: {total_files}')
+    print(f'Successfully processed files: {counter_success}')
+    print(f'Files skipped due to wavelength coverage issues: {counter_unk}')
     return 
 
 if __name__ == '__main__':
 
-    inbase = "../data/processed"
-    outbase = "../data/templates"
+    inbase = "../data/processed2"
+    outbase = "../data/templates2"
 
     process_templates(inbase, outbase)

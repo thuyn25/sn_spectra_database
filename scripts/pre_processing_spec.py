@@ -10,7 +10,7 @@ import numpy as np
 from specload import read_spec
 from remove_tellurics import remove_tellurics, degrade_telluric
 from astropy.time import Time
-from collections import Counter
+from collections import Counter, defaultdict
 
 def setup_new_templates(inbase, outbase, sndata, remtels=None, telspec=None):
     infiles = glob.glob(inbase+"/*")
@@ -18,6 +18,7 @@ def setup_new_templates(inbase, outbase, sndata, remtels=None, telspec=None):
     counter_unk = 0
     type_counts = Counter() 
     total_events = 0
+    used_filenames = {}
 
     # /Users/beehuynh/Developer/test_suites/sn_spectra_database/data/raw/osc_raw_data_20260325/2010hy_2010-09-16.dat
     for file in infiles:
@@ -30,7 +31,7 @@ def setup_new_templates(inbase, outbase, sndata, remtels=None, telspec=None):
 
         sn_version = parts[4] if len(parts) > 4 else '_'
         sn_version = sn_version.split('.')[0]
-
+        
         w = sndata['name'] == sn_name   # sndata from SNlist.txt
         sntype = sndata['type'][w][0]
         if sntype != 'SLSN-I': print(f'{filename} has type {sntype}')
@@ -51,7 +52,6 @@ def setup_new_templates(inbase, outbase, sndata, remtels=None, telspec=None):
             counter_unk += 1
             continue
         # print(maxdate)
-        type_counts[sntype] += 1
         maxtime = Time(maxdate, format='isot', scale='utc')
         # Get observation time
         obs_datestr = filename.split('_')[1]
@@ -67,10 +67,17 @@ def setup_new_templates(inbase, outbase, sndata, remtels=None, telspec=None):
         elif phase > 0:
             ph=f'p{abs(round(phase)):04d}'
         
-        if sn_version != '_':
-            outname = "sn"+sn_name+'_'+sn_version+'.'+ph+'.dat'
+        base_outname = f"sn{sn_name}.{ph}"
+        extension='.dat'
+        if base_outname not in used_filenames:
+            outname = base_outname + extension
+            used_filenames[base_outname] = 1
         else:
-            outname = "sn"+sn_name+'.'+ph+'.dat'
+            version_num = used_filenames[base_outname]
+            outname = f'{base_outname}_v{version_num:02d}{extension}'
+            used_filenames[base_outname] += 1
+            print(f'Name collision detected for {sn_name}at phase {ph} => {outname}')
+
 
         try:
             tspec, isest = read_spec(file, silence=True)
@@ -85,6 +92,7 @@ def setup_new_templates(inbase, outbase, sndata, remtels=None, telspec=None):
                 counter_unk += 1
                 continue
             else:
+                print(f"Unexpected error processing {filename}. Skipping this file.")
                 counter_unk += 1
                 raise e
             
@@ -99,7 +107,7 @@ def setup_new_templates(inbase, outbase, sndata, remtels=None, telspec=None):
                 h2otellshift=0
         else:
             corrspec = tspec
-
+        print('\n\n')
         outpath= os.path.join(str(outbase),str(sntype))
         os.makedirs(outpath, exist_ok=True)
         outfile = os.path.join(outpath, outname)
@@ -124,6 +132,7 @@ def setup_new_templates(inbase, outbase, sndata, remtels=None, telspec=None):
             header+='\n'
         header+='wav flux eflux'
         np.savetxt(outfile, corrspec, header=header)
+        type_counts[sntype] += 1
     type_counts_dict = dict(type_counts)
     
     print(f"\nProcessing complete.")
@@ -131,10 +140,61 @@ def setup_new_templates(inbase, outbase, sndata, remtels=None, telspec=None):
     print(f"Total files excluded: {counter_unk} due to unknown properties or loading errors.")
     print(f"Breakdown of types processed: {type_counts_dict}")
     
+def check_for_collisions(inbase, sndata):
+    infiles = glob.glob(inbase + "/*")
+    # Dictionary to track: {predicted_outname: [list_of_original_files]}
+    name_tracker = defaultdict(list)
+    
+    for file in infiles:
+        filename = os.path.basename(file)
+        parts = filename.split('_')
+        sn_name = parts[0]
+        obs_datestr = parts[1]
+        
+        # Match metadata
+        w = sndata['name'] == sn_name
+        if not any(w):
+            continue
+            
+        maxdate = sndata['max_date'][w][0]
+        if maxdate == 'unknown':
+            maxdate = sndata['discovery_date'][w][0]
+            if maxdate == 'unknown': continue
+
+        try:
+            # Replicate your current naming logic
+            maxtime = Time(maxdate, format='isot', scale='utc')
+            obstime = Time(obs_datestr, format='isot', scale='utc')
+            phase = obstime.jd - maxtime.jd
+            
+            prefix = 'p' if phase >= 0 else 'm'
+            ph = 'max' if phase == 0 else f'{prefix}{abs(round(phase)):04d}'
+            
+            # This is your current (colliding) naming convention
+            predicted_outname = f"sn{sn_name}.{ph}.dat"
+            name_tracker[predicted_outname].append(filename)
+        except:
+            continue
+
+    # Analysis
+    collisions = {out: origs for out, origs in name_tracker.items() if len(origs) > 1}
+    
+    print(f"--- Collision Report ---")
+    print(f"Total output names predicted: {len(name_tracker)}")
+    print(f"Number of names with collisions: {len(collisions)}")
+    
+    if collisions:
+        print("\nTop 5 Collisions (Output Name -> Original Files):")
+        for out, origs in list(collisions.items())[:5]:
+            print(f"\n{out}:")
+            for o in origs:
+                print(f"  - {o}")
+                
+    return collisions
 
 if __name__ == '__main__':
 
-    inbase = '/Users/beehuynh/Developer/test_suites/sn_spectra_database/data/raw/wiserep_rename_data_20260325_130547'
+    inbase = '/Users/beehuynh/Developer/test_suites/sn_spectra_database/data/raw/osc_raw_data_20260406/'
     outbase = '/Users/beehuynh/Developer/test_suites/sn_spectra_database/data/processed2/'
     dtype =[('name','<U25'),('type','<U11'), ('redshift','<U10'), ('max_date','<U20'),('discovery_date','<U20')]
     sndata = np.loadtxt('SNlist_apr30.txt', comments='#', dtype=dtype)
@@ -180,4 +240,5 @@ if __name__ == '__main__':
 
     setup_new_templates(inbase, outbase, sndata, remtels=remtels, telspec=tell)
 
+    # check_for_collisions(inbase, sndata)
     # setup_new_templates(inbase, outbase, sndata)
