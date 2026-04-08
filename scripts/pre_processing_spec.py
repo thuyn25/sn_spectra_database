@@ -10,22 +10,30 @@ import numpy as np
 from specload import read_spec
 from remove_tellurics import remove_tellurics, degrade_telluric
 from astropy.time import Time
+from collections import Counter
 
 def setup_new_templates(inbase, outbase, sndata, remtels=None, telspec=None):
     infiles = glob.glob(inbase+"/*")
     lines = load_lines()
+    counter_unk = 0
+    type_counts = Counter() 
+    total_events = 0
+
     # /Users/beehuynh/Developer/test_suites/sn_spectra_database/data/raw/osc_raw_data_20260325/2010hy_2010-09-16.dat
     for file in infiles:
         unkflag1 = False     # for 'unknown' max_date, use discovery_date
         unkflag2 = False     # for 'unknown' max_date and discovery_date
+        total_events += 1
         filename=file.split("/")[-1]
-        sn_name = filename.split('_')[0]
+        parts = filename.split('_')
+        sn_name = parts[0]
 
-        print(filename)
+        sn_version = parts[4] if len(parts) > 4 else '_'
+        sn_version = sn_version.split('.')[0]
 
         w = sndata['name'] == sn_name   # sndata from SNlist.txt
-        # print(w)
         sntype = sndata['type'][w][0]
+        if sntype != 'SLSN-I': print(f'{filename} has type {sntype}')
         redshift = sndata['redshift'][w][0]
         maxdate = sndata['max_date'][w][0]
         
@@ -33,11 +41,17 @@ def setup_new_templates(inbase, outbase, sndata, remtels=None, telspec=None):
             maxdate=sndata['discovery_date'][w][0]
             unkflag1=True
             if maxdate == 'unknown':    # both max_date and disdate = unknown
+                print(sn_name, maxdate, 'unknown, checking event')
+                print(f"Both max_date and discovery_date are unknown for {filename}. Skip the event.")
+                counter_unk += 1
+                unkflag2=True 
                 continue
-            else:
-                unkflag2=True
+        if redshift == 'unknown':
+            print(f"Redshift is unknown for {filename}. Skip the event.")
+            counter_unk += 1
+            continue
         # print(maxdate)
-
+        type_counts[sntype] += 1
         maxtime = Time(maxdate, format='isot', scale='utc')
         # Get observation time
         obs_datestr = filename.split('_')[1]
@@ -53,9 +67,27 @@ def setup_new_templates(inbase, outbase, sndata, remtels=None, telspec=None):
         elif phase > 0:
             ph=f'p{abs(round(phase)):04d}'
         
-        outname = "sn"+sn_name+'.'+ph+'.dat'
+        if sn_version != '_':
+            outname = "sn"+sn_name+'_'+sn_version+'.'+ph+'.dat'
+        else:
+            outname = "sn"+sn_name+'.'+ph+'.dat'
 
-        tspec, isest = read_spec(file, silence=True)
+        try:
+            tspec, isest = read_spec(file, silence=True)
+
+            if isinstance(tspec, float) or tspec is None:
+                print(f'Skipping this file {filename} because failed to load')
+                counter_unk += 1
+                continue
+        except ValueError as e:
+            if "B-spline failed to evaluate" in str(e):
+                print(f"Error processing {filename}: {e}. Skipping this file.")
+                counter_unk += 1
+                continue
+            else:
+                counter_unk += 1
+                raise e
+            
         if remtels is not None:
             if outname in remtels:
                 corrspec, o2tellscale, o2tellshift, h2otellscale, h2otellshift = remove_tellurics(tspec, telspec)
@@ -73,7 +105,6 @@ def setup_new_templates(inbase, outbase, sndata, remtels=None, telspec=None):
         outfile = os.path.join(outpath, outname)
         z = float(redshift)
         corrspec['wav'] /= (1+z) #de-redshift
-        spec_source = 'unknown'
         header = f'{sn_name} data from WISeREP/OSC\n'
         header+='\n'
         header+=f"de-redshifted assuming z={z:.7f}\n"
@@ -89,19 +120,25 @@ def setup_new_templates(inbase, outbase, sndata, remtels=None, telspec=None):
             if unkflag2:
                 header+='Both max brightness date and discovery date are unknown. Skip the event.\n'
         else:
+            header+='Max brightness date: '+maxdate+'\n'
             header+='\n'
         header+='wav flux eflux'
         np.savetxt(outfile, corrspec, header=header)
-
-
+    type_counts_dict = dict(type_counts)
+    
+    print(f"\nProcessing complete.")
+    print(f'Total events processed: {total_events}')
+    print(f"Total files excluded: {counter_unk} due to unknown properties or loading errors.")
+    print(f"Breakdown of types processed: {type_counts_dict}")
+    
 
 if __name__ == '__main__':
 
-    inbase = '/Users/beehuynh/Developer/test_suites/sn_spectra_database/data/raw/osc_raw_data_20260325'
-    outbase = '/Users/beehuynh/Developer/test_suites/sn_spectra_database/data/processed/'
-    dtype =[('name','<U16'),('type','<U11'), ('redshift','<U10'), ('max_date','<U20'),('discovery_date','<U20')]
-    sndata = np.loadtxt('SLSNlist.txt', comments='#', dtype=dtype)
-    # w = sndata['name'] == '2009jh' 
+    inbase = '/Users/beehuynh/Developer/test_suites/sn_spectra_database/data/raw/wiserep_rename_data_20260325_130547'
+    outbase = '/Users/beehuynh/Developer/test_suites/sn_spectra_database/data/processed2/'
+    dtype =[('name','<U25'),('type','<U11'), ('redshift','<U10'), ('max_date','<U20'),('discovery_date','<U20')]
+    sndata = np.loadtxt('SNlist_apr30.txt', comments='#', dtype=dtype)
+    # print(sndata['name'])
     # sntype = sndata['type'][w][0]
     # print(f'With w={w}, retrieving sn type:', sntype)
     # print(sndata, sndata.dtype.names)

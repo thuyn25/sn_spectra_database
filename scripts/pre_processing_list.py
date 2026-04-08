@@ -120,9 +120,10 @@ for name in osc['sn_name']:
     new_name = clean_name(name)
     names.append(new_name)
 osc['sn_name'] = names
+# print('unique osc sn names:', len(osc['sn_name'].unique()))
 #------------------------------------------------------------------------
 # Check total numbers of unique events with spectra
-osc_spec_dir = '../data/raw/osc_raw_data_20260325'
+osc_spec_dir = '../data/raw/osc_raw_data_20260406'
 wis_spec_dir = '../data/raw/wiserep_rename_data_20260325_130547'
 osc_infiles = glob.glob(osc_spec_dir+"/*.dat")
 wis_infiles = glob.glob(wis_spec_dir+"/*")
@@ -131,7 +132,11 @@ wis_sne = []
 
 for f in osc_infiles:
     fname = os.path.basename(f)
-    sn_name = fname.split('_')[0]
+    parts = fname.split('_')
+    sn_name = parts[0]
+    sn_version = parts[2] if len(parts) > 2 else '_'
+    sn_version = sn_version.split('.')[0]
+    # print(sn_version)
     osc_sne.append(sn_name)
     
 for f in wis_infiles:
@@ -188,7 +193,7 @@ for name in all_sne:
         sn_type = row_osc.iloc[0]['sn_type']
         z = row_osc.iloc[0]['redshift']
     else:
-        print(f'{name} does not have info saved...Debug')
+        print(f'{name} does not have info saved...DEBUGGGG')
         continue
 
     max_date = 'unknown'
@@ -216,7 +221,7 @@ for name in all_sne:
             gomez_row = gomez24_df[gomez24_df['norm_name'] == normed_name]
             if not gomez_row.empty:
                 print(f'{normed_name} matching with gomez df...')
-                print('max_date:', max_date, 'disdate:', discovery_date)
+                print('max_date:', max_date, 'disdate:', discovery_date, '\n')
                 max_date = gomez_row.iloc[0]['max_brightness_date']
                 discovery_date = gomez_row.iloc[0]['discovery_date']
 
@@ -238,12 +243,24 @@ line2 = f"{'#<U25':<25}\t{'<U10':<10}\t{'<10':<10}\t{'<10':<10}\t{'<10':<10}"
 f1.write(line1 + '\n')
 f1.write(line2 + '\n')
 
+unk_sn_count = 0
+unk_sne = []
+tot_sn_count = 0
 for row in sn_list_data:
     sn_name, sn_type, z, max_date, discovery_date = row
     z = str(z) if not pd.isna(z) else 'unknown'
     max_date = str(max_date) if not pd.isna(max_date) else 'unknown'
     discovery_date = str(discovery_date) if not pd.isna(discovery_date) else 'unknown'
 
+    if max_date == 'unknown' and discovery_date == 'unknown':
+        print(sn_name, 'has both max_date and discovery_date unknown...DEBUGGGG')
+        unk_sn_count += 1
+        unk_sne.append(sn_name)
+    tot_sn_count += 1
+
     f1.write(f'{sn_name:<25}{sn_type:<10}{z:<10}{max_date:<20}{discovery_date:<20}\n')
 
-
+print(f"Total SNe with both max_date and discovery_date unknown: {unk_sn_count}")
+print(f"Total SNe in SNlist.txt: {tot_sn_count}")
+# unk_sne_df = pd.DataFrame(unk_sne, columns=['sn_name'])
+# unk_sne_df.to_csv('unknown_sne.csv', index=False, header=['sn_name'])

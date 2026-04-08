@@ -4,6 +4,7 @@
 #
 # *************************************************************************************************
 
+import io
 import os
 import glob
 import numpy as np
@@ -155,6 +156,8 @@ def estimate_eflux(wav, flux, lines=None, zguess=0., silence=False, method="bspl
         stds=np.array(stds).flatten()
         wavrange=np.max(wav)-np.min(wav)
         kspace=10.0*step
+        if len(testwavs) == 0:
+            raise ValueError("testwavs is empty because the B-spline failed to evaluate.")
         wavrange=np.arange(testwavs.min(),testwavs.max()+kspace,kspace)
         wavrange=np.delete(wavrange,[0,-1])
         knts=[wav for wav in wavrange]
@@ -164,7 +167,17 @@ def estimate_eflux(wav, flux, lines=None, zguess=0., silence=False, method="bspl
                                          knotfun=default_knotfun,kspace=kspace)
         if not silence:
             print("!!!!! FAKING ERROR SPECTRUM !!!!!")
-        eflux=sspl(wav)/norm
+        print('sspl(wav)', sspl)
+        if isinstance(sspl, (float, int)):
+            if not silence:
+                print('B-Spline failed.  Falling back to median error.')
+            eflux = np.ones_like(wav) * np.median(stds)
+        else:
+            if not silence:
+                print(f'B-Spline fit success.')
+            eflux = sspl(wav)/norm
+        
+        # eflux=sspl(wav)/norm
         w=eflux<np.min(stds)
         nw=np.size(w)
         if nw>0:
@@ -181,7 +194,8 @@ def estimate_eflux(wav, flux, lines=None, zguess=0., silence=False, method="bspl
 # Reading the spectrum
 # ********************************************
 
-def convert_idl_spec(fname, ecol=2, isest=False):
+
+def convert_idl_spec(fname, ecol=2, isest=False,skiprows=0):
     """
     CONVERT_IDL_SPEC
     ****************************************************************************
@@ -203,15 +217,18 @@ def convert_idl_spec(fname, ecol=2, isest=False):
     Written by Michael Baer
     """
     if True:
-        strspec = np.loadtxt(fname, comments='#', dtype=str).T
+        strspec = np.loadtxt(fname, comments='#', delimiter=',', dtype=str, skiprows=skiprows).T
         if len(strspec) < 2:
             print('READ_SPEC ERROR: The data file is invalid')
             print('Check README.md for more details')
             return
+        print(strspec)
         dl = []
         for ll in range(len(strspec)):
-            for i, dpt in enumerate(strspec[ll]):
+            for i, dpt in enumerate(strspec[ll]):   # dpt is each character of the string
+                print('dpt', dpt)
                 dpt = dpt.replace('D','e')
+                dpt = dpt.replace('%', '')
                 strspec[ll,i] = dpt
             dl.append(strspec[ll].astype('float'))
         spec = []
@@ -250,12 +267,64 @@ def read_spec(fname, lines=None, zguess=0., isest=False, ecol=2, **kwargs):
     if not os.path.isfile(fname):
         print("READ_SPEC ERROR: file not found")
         return 0., 0.
+    
+    cleaned_rows = []
+    
+    with open(fname, 'r') as f:
+        for line in f:
+            # 1. Strip whitespace and skip comments
+            raw_line = line.strip()
+            if not raw_line or raw_line.startswith('#'):
+                continue
+            
+            # 2. Standardize delimiters and remove common garbage
+            # Replacing commas with spaces allows .split() to work for everything
+            clean_line = raw_line.replace(',', ' ').replace('%', '')
+            
+            # 3. Split into parts (handles spaces and tabs \t automatically)
+            parts = clean_line.split()
+            
+            # 4. Filter: Only keep parts that are actually numbers
+            numeric_row = []
+            for item in parts:
+                try:
+                    # Handle IDL 'D' exponents (e.g., 1.23D-15 -> 1.23e-15)
+                    val_str = item.replace('D', 'e').replace('d', 'e')
+                    float(val_str) # Test if it's a number
+                    numeric_row.append(val_str)
+                except ValueError:
+                    # Skips text like "no", "WAVE", "FLUX", etc.
+                    continue
+            
+            # 5. Only keep rows that have at least Wavelength and Flux
+            if len(numeric_row) >= 2:
+                cleaned_rows.append(numeric_row)
+
+    if not cleaned_rows:
+        print(f"READ_SPEC ERROR: No valid numeric data found in {fname}")
+        return None, False
+    file = fname.split('/')[-1]
+    
     try:
-        spec = np.loadtxt(fname, comments='#').T
-    except:
-        spec = convert_idl_spec(fname)
-        if spec is None:
-            return 0., 0.
+        # Convert list of lists to a 2D NumPy array and transpose
+        # Now spec[0] is wav, spec[1] is flux, etc.
+        spec = np.array(cleaned_rows, dtype=float).T
+        wav = spec[0]
+        flux = spec[1]
+        if file == '2017egm_2017-10-08_12-00-00_9498.dat':
+            print('spec', spec)
+            wav = spec[0] * 1e4     # convert to angstroms
+            flux = spec[1]
+        if spec[0][0] < 1:
+            wav = spec[0] * 1e4     # convert to angstroms
+            flux = spec[1]
+    
+    except Exception as e:
+        print(f"READ_SPEC ERROR: Numeric conversion failed: {e}")
+        return None, False
+    spec[0] = wav
+    spec[1] = flux
+
     if len(spec) < 2:
         print('READ_SPEC ERROR: The data file is invalid')
         print('Check README.md for more details')
@@ -268,6 +337,7 @@ def read_spec(fname, lines=None, zguess=0., isest=False, ecol=2, **kwargs):
         wav=wav[wok];flux=flux[wok]
         # If no error spectrum is provided, estimate
         isest = True
+        print(fname)
         e_flux = estimate_eflux(wav, flux, lines, zguess, **kwargs)
         if not np.any(np.isfinite(e_flux)):
             print("whoops!")
@@ -301,6 +371,7 @@ def read_spec(fname, lines=None, zguess=0., isest=False, ecol=2, **kwargs):
         outspec.append(np.array((wav[i], flux[i], e_flux[i]), dtype=[('wav', float), ('flux', float), ('eflux', float)]))
     outspec = np.array(outspec)
     return outspec, isest
+
 
 def bin_spec_weighted(spec,lowav,hiwav,dwav,sigma=None,samewav=True,sigwav=None):
     """
